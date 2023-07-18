@@ -1,0 +1,654 @@
+rent_command:
+    type: command
+    debug: false
+    name: property
+    usage: /property
+    description: Handles property renting.
+    permission: dscript.property
+    aliases:
+    - rent
+    - prop
+    - p
+    tab completions:
+        1: <list[claim|pay|buy|unclaim|info|list|transfer|addmember|removemember|teleport].include[<tern[<player.has_permission[dscript.rent_admin]>].pass[create|redefine|rename|delete|setprice|setbuyprice|open|close|grant|description|rpstats|show|shownear].fail[<list>]>]>
+        2: <server.flag[rentables].keys.parse[unescaped]||<list>>
+        3: <server.online_players.filter[has_flag[vanished].not].parse[name]>
+    script:
+    - if !<player.has_flag[waymaker_verified]>:
+        - narrate "<&[error]>You cannot use this command until you are verified."
+    - choose <context.args.first||help>:
+        - case create:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property create [name] [rent price] <&[warning]>- use /seltool"
+                - stop
+            - if <server.has_flag[rentables.<context.args.get[2].escaped>]>:
+                - narrate "<&[error]>An area by that name already exists."
+                - stop
+            - if !<player.has_flag[seltool_selection]>:
+                - narrate "<&[error]>You must select an area with <&[warning]>/seltool <&[error]>before you can make it a property."
+                - stop
+            - define new_region <player.flag[seltool_selection]||null>
+            - if <[new_region]> == null || ( <[new_region].object_type> == polygon && <[new_region].corners.size> < 3 ):
+                - narrate "<&[error]>Your area selection is incomplete or invalid."
+                - stop
+            - if !<context.args.get[3].is_integer>:
+                - narrate "<&[error]>Price must be an integer number."
+                - stop
+            - define rent_map <map.with[name].as[<context.args.get[2]>].with[price].as[<context.args.get[3]>].with[location].as[<player.location>].with[rentable].as[false].with[description].as[<list>].with[members].as[<list>].with[buy_price].as[0]>
+            - flag server rentables.<context.args.get[2].escaped>:<[rent_map]>
+            - note <[new_region]> as:rentable_id_<context.args.get[2].escaped>
+            - narrate "<&[base]>Property <&[emphasis]><context.args.get[2]><&[base]> created. Now consider using commands <&[warning]>/property description, /property open, ..."
+        - case redefine:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/property redefine [name] <&[warning]>- use /seltool"
+                - stop
+            - inject rentable_name_match_logic
+            - if !<player.has_flag[seltool_selection]>:
+                - narrate "<&[error]>You must select an area with <&[warning]>/seltool <&[error]>to use this command."
+                - stop
+            - define new_region <player.flag[seltool_selection]||null>
+            - if <[new_region]> == null || ( <[new_region].object_type> == polygon && <[new_region].corners.size> < 3 ):
+                - narrate "<&[error]>Your area selection is incomplete or invalid."
+                - stop
+            - note remove as:rentable_id_<[area]>
+            - note <[new_region]> as:rentable_id_<[area]>
+            - flag server rentables.<[area]>.location:<player.location>
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> redefined."
+        - case show:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - inject rentable_name_match_logic
+            - define old_sel <player.flag[seltool_selection]||null>
+            - if <cuboid[rentable_id_<[area]>]||null> != null:
+                - flag player seltool_selection:<cuboid[rentable_id_<[area]>]> expire:1t
+                - inject selector_tool_status_task.cuboid
+            - else if <polygon[rentable_id_<[area]>]||null> != null:
+                - flag player seltool_selection:<polygon[rentable_id_<[area]>]> expire:1t
+                - inject selector_tool_status_task.polygon
+            - if <[old_sel]> != null:
+                - flag player seltool_selection:<[old_sel]>
+            - narrate <[message]||Error!>
+        - case shownear:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - define old_sel <player.flag[seltool_selection]||null>
+            - foreach <server.flag[rentables].filter_tag[<[filter_value.location].distance[<player.location>].is[less].than[100]>]> key:area as:area_data:
+                - if <cuboid[rentable_id_<[area]>]||null> != null:
+                    - flag player seltool_selection:<cuboid[rentable_id_<[area]>]> expire:1t
+                    - inject selector_tool_status_task.cuboid
+                - else if <polygon[rentable_id_<[area]>]||null> != null:
+                    - flag player seltool_selection:<polygon[rentable_id_<[area]>]> expire:1t
+                    - inject selector_tool_status_task.polygon
+            - if <[old_sel]> != null:
+                - flag player seltool_selection:<[old_sel]>
+        - case delete:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/property delete [name]"
+                - stop
+            - inject rentable_name_match_logic
+            - if <[area_data].contains[owner]>:
+                - if <[area_data.owner]> == business:
+                    - flag server businesses.<[area_data.owner_business]>.rentables_owned:<-:<[area]>
+                    - narrate "<&[warning]>Property was previously owned by business <&[emphasis]><[area_data.owner_business]><&[warning]>, their claim has been removed."
+                - else:
+                    - run cc_exclude_flag def.pair:<[area_data.owner]> def.flag:rentables_owned def.value:<[area]>
+            - flag server rentables.<[area]>:!
+            - note remove as:rentable_id_<[area]>
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> deleted."
+        - case rename:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property rename [old name] [new name]"
+                - stop
+            - inject rentable_name_match_logic
+            - define new_name <context.args.get[3]>
+            - if <server.has_flag[rentables.<[new_name]>]>:
+                - narrate "<&[error]>An area by that new name already exists."
+                - stop
+            - define area_data <[area_data].with[name].as[<[new_name]>]>
+            - if <[area_data].contains[owner]>:
+                - foreach <server.flag[rentables.<[area]>.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:rentable_member_of def.value:<[area]>
+                - if <[area_data.owner]> == business:
+                    - flag server businesses.<[area_data.owner_business]>.rentables_owned:<-:<[area]>
+                    - flag server businesses.<[area_data.owner_business]>.rentables_owned:->:<[new_name].escaped>
+                - else:
+                    - run cc_exclude_flag def.pair:<[area_data.owner]> def.flag:rentables_owned def.value:<[area]>
+                    - run cc_include_flag def.pair:<[area_data.owner]> def.flag:rentables_owned def.value:<[new_name].escaped>
+            - flag server rentables.<[area]>:!
+            - flag server rentables.<[new_name].escaped>:<[area_data]>
+            - if <cuboid[rentable_id_<[area]>].exists>:
+                - note <cuboid[rentable_id_<[area]>]> as:rentable_id_<[new_name].escaped>
+            - else if <polygon[rentable_id_<[area]>].exists>:
+                - note <polygon[rentable_id_<[area]>]> as:rentable_id_<[new_name].escaped>
+            - note remove as:rentable_id_<[area]>
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> renamed."
+        - case setprice:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property setprice [name] [price]"
+                - stop
+            - inject rentable_name_match_logic
+            - if !<context.args.get[3].is_integer>:
+                - narrate "<&[error]>Price must be an integer number."
+                - stop
+            - flag server rentables.<[area]>.price:<context.args.get[3]>
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> now has rent price <&6><context.args.get[3]> TG<&[base]>."
+        - case setbuyprice:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property setbuyprice [name] [price]"
+                - stop
+            - inject rentable_name_match_logic
+            - if !<context.args.get[3].is_integer>:
+                - narrate "<&[error]>Price must be an integer number."
+                - stop
+            - flag server rentables.<[area]>.buy_price:<context.args.get[3]>
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> now has permanent-buy price <&6><context.args.get[3]> TG<&[base]>."
+        - case open:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/property open [name]"
+                - stop
+            - inject rentable_name_match_logic
+            - define old_owner <[area_data.owner]||null>
+            - if <[old_owner]> != null:
+                - if <[old_owner]> == business:
+                    - flag server businesses.<[area_data.owner_business]>.rentables_owned:<-:<[area]>
+                    - narrate "<&[warning]>Property was previously owned by business <&[emphasis]><[area_data.owner_business]><&[warning]>, their claim has been removed."
+                - else:
+                    - run cc_exclude_flag def.pair:<[area_data.owner]> def.flag:rentables_owned def.value:<[area]>
+                    - if <[old_owner].before[__].as[player].is_online>:
+                        - narrate "<&[base]>You no longer own property <&[emphasis]><[area_data.name]><&[base]>." targets:<[old_owner].before[__].as[player]>
+                    - narrate "<&[warning]>Property was previously owned by <proc[proc_format_name].context[<[old_owner].before[__].as[player]>|<player>]><&[warning]>, their claim has been removed."
+                - flag server rentables.<[area]>.owner:!
+                - flag server rentables.<[area]>.owner_business:!
+                - flag server rentables.<[area]>.owned_type:!
+                - foreach <server.flag[rentables.<[area]>.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:rentable_member_of def.value:<[area]>
+            - flag server rentables.<[area]>.rentable:true
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> opened for rent claims."
+        - case close:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - inject rentable_name_match_logic
+            - define old_owner <[area_data.owner]||null>
+            - if <[old_owner]> != null:
+                - if <[old_owner]> == business:
+                    - flag server businesses.<[area_data.owner_business]>.rentables_owned:<-:<[area]>
+                    - narrate "<&[warning]>Property was previously owned by business <&[emphasis]><[area_data.owner_business]><&[warning]>, their claim has been removed."
+                - else:
+                    - run cc_exclude_flag def.pair:<[old_owner]> def.flag:rentables_owned def.value:<[area]>
+                    - if <[old_owner].before[__].as[player].is_online>:
+                        - narrate "<&[base]>You no longer own property <&[emphasis]><[area_data.name]><&[base]>." targets:<[old_owner].before[__].as[player]>
+                    - narrate "<&[warning]>Property was previously owned by <proc[proc_format_name].context[<[old_owner].before[__].as[player]>|<player>]><&[warning]>, their claim has been removed."
+                - flag server rentables.<[area]>.owner:!
+                - flag server rentables.<[area]>.owner_business:!
+                - flag server rentables.<[area]>.owned_type:!
+                - foreach <server.flag[rentables.<[area]>.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:rentable_member_of def.value:<[area]>
+            - flag server rentables.<[area]>.rentable:false
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> closed for rent claims."
+        - case grant:
+            - if !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 4:
+                - narrate "<&[error]>/property grant [name] [player] ['rent' or 'own']"
+                - stop
+            - inject rentable_name_match_logic
+            - define player <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[player]> == null:
+                - narrate "<&[error]>Unknown target player."
+                - stop
+            - if <[area_data].contains[owner]>:
+                - narrate "<&[error]>That property is already owned. You must remove the owner before it can be granted to somebody else."
+                - stop
+            - if <context.args.get[4]> != rent && <context.args.get[4]> != own:
+                - narrate "<&[error]>Grant-type must be 'rent' or 'own'."
+                - stop
+            - if <[player].flag[character_mode]> != ic:
+                - narrate "<&[error]>The player must be IC to use this."
+                - stop
+            - define is_forever <context.args.get[4].is[==].to[own]>
+            - if <[player].money> < <[area_data.<tern[<[is_forever]>].pass[buy_price].fail[price]>]>:
+                - narrate "<&[error]>That player cannot afford the price for that property."
+                - stop
+            - if <[player].proc[cc_flag].context[rentables_owned].size||0> >= <proc[rent_proc_max_properties].context[<[player]>]>:
+                - narrate "<&[error]>That player already owns too many properties."
+                - stop
+            - run rent_claim_now_task def:<[area]>|<[is_forever]> player:<[player]>
+            - narrate "<&[base]>Property <&[emphasis]><[area_data.name]><&[base]> is now owned by <proc[proc_format_name].context[<[player]>|<player>]>."
+        - case transfer:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property transfer [name] [to-player]"
+                - stop
+            - inject rentable_name_match_logic
+            - if <[area_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You don't own that property."
+                - stop
+            - define player <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[player]> == null:
+                - narrate "<&[error]>Unknown target player."
+                - stop
+            - if <[player].flag[character_mode]> != ic:
+                - narrate "<&[error]>The player must be IC to use this."
+                - stop
+            - if <[player].flag[rentables_owned].size||0> >= <proc[rent_proc_max_properties].context[<[player]>]>:
+                - narrate "<&[error]>That player already owns too many properties."
+                - stop
+            - if <context.args.get[4]||null> == confirm && <player.flag[must_confirm_rentable_transfer.<[area]>]||null> == <[player]>:
+                - flag <player> must_confirm_rentable_transfer.<[area]>:!
+                - run cc_exclude_flag def.pair:<player> def.flag:rentables_owned def.value:<[area]>
+                - run cc_include_flag def.pair:<[player]> def.flag:rentables_owned def.value:<[area]>
+                - flag server rentables.<[area]>.owner:<[player].proc[cc_idpair]>
+                - narrate "<&[base]>Property transferred to <[player].proc[cc_idpair].proc[cc_format_idpair].context[<player>]>."
+                - if <[player].is_online>:
+                    - narrate "<&[base]>Property <&[emphasis]><[area]> <&[base]>has been transfered to you. You can keep it if you pay its rent, or unclaim it if you don't want it." targets:<[player]>
+            - else:
+                - flag <player> must_confirm_rentable_transfer.<[area]>:<[player]> duration:1h
+                - narrate "<&[base]>Are you sure? Use <&[warning]>/property transfer <[area]> <[player].name> confirm"
+        - case teleport tp:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use rent commands."
+                - stop
+            - if !<player.has_permission[dscript.rent_tp]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - inject rentable_name_match_logic
+            - if !<[area].proc[rent_is_owned_proc]> && !<[area_data.members].contains[<player.proc[cc_idpair]>]||false> && !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>Only the owner and members of a property can teleport to it."
+                - stop
+            - narrate "<&[base]>Teleporting you to <&[emphasis]><[area_data.name]>"
+            - teleport <player> <[area_data.location]>
+        - case rpstats:
+            - if !<player.has_permission[dscript.rent_tp]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - inject rentable_name_match_logic
+            - narrate "<&[base]>RP stats for property <&[emphasis]><[area_data.name]><&[base]>..."
+            - run rp_stats_describe_task def:<list_single[<[area_data.rp_stats]||<map>>]>
+        - case claim rent:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use rent commands."
+                - stop
+            - inject rentable_name_match_logic
+            - if !<[area_data.rentable]>:
+                - narrate "<&[error]>This property is not rentable."
+                - stop
+            - if <[area_data].contains[owner]>:
+                - narrate "<&[error]>This property is already claimed."
+                - stop
+            - if !<player.has_permission[dscript.free_rent]>:
+                - if <player.money> < <[area_data.price]>:
+                    - narrate "<&[error]>You cannot afford to rent this property. The price is <&6><[area_data.price]> TG"
+                    - stop
+            - define max <proc[rent_proc_max_properties].context[<player>]>
+            - if <player.proc[cc_flag].context[rentables_owned].size||0> >= <[max]>:
+                - narrate "<&[error]>You already own too many properties. The max you are allowed is <&[emphasis]><[max]><&[error]>."
+                - stop
+            - if <player.has_flag[rentable_recently_unclaimed.<[area]>]>:
+                - narrate "<&[error]>You recently manually unclaimed this property. You must wait a few days before you will be allowed to re-claim it yourself (to prevent trolling of the property system). Contact staff if you need an exception made for your case."
+                - stop
+            - if <context.args.get[3]||null> == confirm && <player.has_flag[must_confirm_rentable.<[area]>]>:
+                - run rent_claim_now_task def:<[area]>|false
+                - flag <player> must_confirm_rentable.<[area]>:!
+            - else:
+                - flag <player> must_confirm_rentable.<[area]> duration:1h
+                - narrate "<&[base]>Are you sure? Use <&[warning]>/property claim <[area]> confirm"
+        - case buy:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use rent commands."
+                - stop
+            - inject rentable_name_match_logic
+            - if !<[area_data.rentable]> || <[area_data.buy_price]> <= 0:
+                - narrate "<&[error]>This property is not available for purchase."
+                - stop
+            - if <[area_data].contains[owner]>:
+                - narrate "<&[error]>This property is already claimed."
+                - stop
+            - if <player.money> < <[area_data.buy_price]>:
+                - narrate "<&[error]>You cannot afford to buy this property. The price is <&6><[area_data.buy_price]> TG"
+                - stop
+            - define max <proc[rent_proc_max_properties].context[<player>]>
+            - if <player.proc[cc_flag].context[rentables_owned].size||0> >= <[max]>:
+                - narrate "<&[error]>You already own too many properties. The max you are allowed is <[max].custom_color[emphasis]>."
+                - stop
+            - if <context.args.get[3]||null> == confirm && <player.has_flag[must_confirm_rentable_buy.<[area]>]>:
+                - run rent_claim_now_task def:<[area]>|true
+                - flag <player> must_confirm_rentable_buy.<[area]>:!
+            - else:
+                - flag <player> must_confirm_rentable_buy.<[area]> duration:1h
+                - narrate "<&[base]>Are you sure? Use <&[warning]>/property buy <[area]> confirm"
+        - case pay:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use rent commands."
+                - stop
+            - inject rentable_name_match_logic
+            - if !<proc[rent_is_owned_proc].context[<[area]>]>:
+                - narrate "<&[error]>Only the owner of a property can pay its rent."
+                - stop
+            - if <[area_data.owned_type]> != rented:
+                - narrate "<&[error]>You own this property forever, you don't have to pay rent."
+                - stop
+            - if !<[area_data.rent_due].is_before[<util.time_now>]>:
+                - narrate "<&[error]>Rent is not currently due."
+                - stop
+            - if <[area_data.owner_business]||null> != null:
+                - define business <[area_data.owner_business]>
+                - define business_data <server.flag[businesses.<[business]>]>
+                - if <[business_data.money]> < <[area_data.price]>:
+                    - narrate "<&[error]>Your business cannot afford rent. The price is <&6><[area_data.price]> TG"
+                    - stop
+                - flag server businesses.<[business]>.money:-:<[area_data.price]>
+                - run eco_log_loss_business def:<list_single[<[business]>].include[<[area_data.price]>].include_single[paid rent for property <[area_data.name]>]>
+                - flag server businesses.Town_Rent.money:+:<[area_data.price]>
+                - run eco_log_gain_business def:<list_single[town_rent].include[<[area_data.price]>].include_single[business <[business_data.name]> paid rent for property <[area_data.name]>]>
+                - narrate "<&[base]>Business <&[emphasis]><[business_data.name]><&[base]> Paid rent price of <&6><[area_data.price]> TG" targets:<[business_data].proc[business_get_msg_targets]>
+                - define next_due <[area_data.rent_due].add[30d]>
+                - flag server rentables.<[area]>.rent_due:<[next_due]>
+                - if <[next_due].is_before[<util.time_now>]>:
+                    - narrate "<&[base]>Your late rent payment is accepted, however the new month's payment is also due, and must be paid as soon as possible."
+                - else:
+                    - narrate "<&[base]>Rent paid. Next due: <&[emphasis]><[next_due].from_now.in_days.round_up> Days"
+            - else:
+                - if !<player.has_permission[dscript.free_rent]>:
+                    - if <player.money> < <[area_data.price]>:
+                        - narrate "<&[error]>You cannot afford rent. The price is <&6><[area_data.price]> TG"
+                        - stop
+                    - money take quantity:<[area_data.price]>
+                    - run eco_log_loss def.amount:<[area_data.price]> "def.reason:paid rent for property <[area_data.name]>"
+                    - flag server businesses.Town_Rent.money:+:<[area_data.price]>
+                    - run eco_log_gain_business def:<list_single[town_rent].include[<[area_data.price]>].include_single[player <player.name.on_hover[<player.uuid>]>'s character <player.proc[cc_flag].context[name]> paid rent for property <[area_data.name]>]>
+                    - narrate "<&[base]>Paid <&6><[area_data.price]> TG"
+                - define next_due <[area_data.rent_due].add[30d]>
+                - flag server rentables.<[area]>.rent_due:<[next_due]>
+                - if <[next_due].is_before[<util.time_now>]>:
+                    - narrate "<&[base]>Your late rent payment is accepted, however the new month's payment is also due, and must be paid as soon as possible."
+                - else:
+                    - narrate "<&[base]>Rent paid. Next due: <&[emphasis]><[next_due].from_now.in_days.round_up> Days"
+        - case unclaim:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use rent commands."
+                - stop
+            - inject rentable_name_match_logic
+            - if <[area_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You don't own that property."
+                - stop
+            - if <context.args.get[3]||null> == confirm && <player.has_flag[must_confirm_rentable.<[area]>]>:
+                - foreach <server.flag[rentables.<[area]>.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:rentable_member_of def.value:<[area]>
+                - flag <player> must_confirm_rentable.<[area]>:!
+                - flag <player> character_cards.<player.flag[current_character]>.rentables_owned:<-:<[area]>
+                - flag server rentables.<[area]>.owner:!
+                - flag server rentables.<[area]>.owner_business:!
+                - flag server rentables.<[area]>.owned_type:!
+                - flag server rentables.<[area]>.members:<list>
+                - flag <player> rentable_recently_unclaimed.<[area]> duration:5d
+                - narrate "<&[base]>Property unclaimed."
+            - else:
+                - flag <player> must_confirm_rentable.<[area]> duration:1h
+                - narrate "<&[base]>Are you sure? You will not be allowed to re-claim this property for a few days. Use <&[warning]>/property unclaim <[area]> confirm"
+        - case description desc:
+            - inject rentable_name_match_logic
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/property description [name] [...]"
+                - stop
+            - if !<[area].proc[rent_is_owned_proc]> && !<player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>You don't own that property."
+                - stop
+            - define description <list[<[area_data.description]>]>
+            - run multi_line_edit_tool def.args:<context.args.get[3].to[last]> def.orig_lines:<[description]> "def.cmd_prefix:/property description [name]" def.wrap_len:99999 def.raw_args:<context.raw_args.after[ ].after[ ].parse_color> def.def_color:<&f> save:edited
+            - define description <entry[edited].created_queue.determination.first>
+            - flag server rentables.<[area]>.description:<[description]>
+        - case addmember:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property transfer [name] [to-player]"
+                - stop
+            - inject rentable_name_match_logic
+            - if !<[area].proc[rent_is_owned_proc]>:
+                - narrate "<&[error]>You don't own that property."
+                - stop
+            - define player <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[player]> == null:
+                - narrate "<&[error]>Unknown target player."
+                - stop
+            - if <[player].flag[character_mode]> != ic:
+                - narrate "<&[error]>That player is not IC."
+                - stop
+            # TODO: Allow specifying target character card
+            - if <[area_data.members].contains[<[player].proc[cc_idpair]>]>:
+                - narrate "<&[error]>That player is already a member."
+                - stop
+            - flag server rentables.<[area]>.members:->:<[player].proc[cc_idpair]>
+            - run cc_include_flag def.pair:<[player].proc[cc_idpair]> def.flag:rentable_member_of def.value:<[area]>
+            - narrate "<&[base]>Added member <proc[proc_format_name].context[<[player]>|<player>]> to the property."
+            - if <[player].is_online>:
+                - narrate "<&[base]>You are now a member of property <&[emphasis]><[area_data.name]><&[base]>." targets:<[player]>
+        - case removemember:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/property transfer [name] [to-player]"
+                - stop
+            - inject rentable_name_match_logic
+            - if !<[area].proc[rent_is_owned_proc]>:
+                - narrate "<&[error]>You don't own that property."
+                - stop
+            - define player <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[player]> == null:
+                - narrate "<&[error]>Unknown target player."
+                - stop
+            - if <[player].flag[character_mode]> != ic:
+                - narrate "<&[error]>That player is not IC."
+                - stop
+            # TODO: Allow specifying target character card
+            - if !<[area_data.members].contains[<[player].proc[cc_idpair]>]>:
+                - narrate "<&[error]>That player is not a member."
+                - stop
+            - flag server rentables.<[area]>.members:<-:<[player].proc[cc_idpair]>
+            - run cc_exclude_flag def.pair:<[player].proc[cc_idpair]> def.flag:rentable_member_of def.value:<[area]>
+            - narrate "<&[base]>Removed member <proc[proc_format_name].context[<[player]>|<player>]> from the property."
+            - if <[player].is_online>:
+                - narrate "<&[base]>You are no longer a member of property <&[emphasis]><[area_data.name]><&[base]>." targets:<[player]>
+        - case info:
+            - inject rentable_name_match_logic
+            - narrate "<&[base]>=== <&[emphasis]><[area_data.name]> <&[base]>==="
+            - if <[area_data.owner]||null> != null:
+                - if <[area_data.owner_business]||null> != null:
+                    - narrate "<&[base]>Owner: Business <&[emphasis]><[area_data.owner_business].unescaped>"
+                - else:
+                    - narrate "<&[base]>Owner: <&[emphasis]><[owner].proc[cc_format_idpair].context[<player>]>"
+                - narrate "<&[base]>Ownership type: <&[emphasis]><[area_data.owned_type]>"
+                - if !<[area_data.members].is_empty>:
+                    - narrate "<&[base]>Members: <&[emphasis]><[area_data.members].parse_tag[<[parse_value].proc[cc_format_idpair].context[<player>]>].formatted>"
+            - else if <[area_data.rentable]>:
+                - narrate "<&[base]>Open for rent."
+                - narrate "<&[base]>Rent price: <&6><[area_data.price]> Trade Gold"
+                - if <[area_data.buy_price]||0> > 0:
+                    - narrate "<&[base]>Buy-forever price: <&6><[area_data.buy_price]> Trade Gold"
+            - else:
+                - narrate "<&[base]>Closed for rent."
+            - if <[area_data.owned_type]||null> != bought && <[area_data.rent_due].exists>:
+                - if <proc[rent_is_owned_proc].context[<[area]>]> || <player.has_permission[dscript.show_rent_due]>:
+                    - if <[area_data.rent_due].is_before[<util.time_now>]>:
+                        - narrate "<&[warning]>Rent is currently due! You must pay within <&[emphasis]><[area_data.rent_due].add[31d].from_now.in_days.round_up> Days"
+                    - else:
+                        - narrate "<&[base]>Rent is next due: <&[emphasis]><[area_data.rent_due].from_now.in_days.round_up> Days"
+            - narrate "<&[base]>Location: <&[emphasis]><[area_data.location].block.xyz>"
+            - if !<[area_data.description].is_empty>:
+                - narrate "<&[base]>Description: <&f><[area_data.description].separated_by[<n>]>"
+            - else:
+                - narrate "<&[base]>Description: <&f>Not yet set. <[area_data.owner].exists.if_true[Tell the owner to set one!].if_false[Buy this property to set a description!]>"
+        - case list:
+            - narrate "<&[base]>Open Properties: <&[emphasis]><server.flag[rentables].values.filter[get[rentable]].filter[contains[owner].not].parse[get[name]].alphanumeric.formatted||None>"
+            - narrate "<&[base]>Claimed Properties: <&[emphasis]><server.flag[rentables].values.filter[contains[owner]].parse[get[name]].alphanumeric.formatted||None>"
+            - narrate "<&[base]>Closed Properties: <&[emphasis]><server.flag[rentables].values.filter[get[rentable].not].filter[contains[owner].not].parse[get[name]].alphanumeric.formatted||None>"
+            - if <player.flag[character_mode]> == ic && !<player.proc[cc_flag].context[rentables_owned].is_empty||true>:
+                - narrate "<&[base]>You own: <&[emphasis]><player.proc[cc_flag].context[rentables_owned].parse[unescaped].formatted||None>"
+        - default:
+            - if <player.has_permission[dscript.rent_admin]>:
+                - narrate "<&[error]>/property create [name] [rent price] <&[warning]>- use /seltool ... note that where you stand matters"
+                - narrate "<&[error]>/property redefine [name] <&[warning]>- use /seltool ... note that where you stand matters"
+                - narrate "<&[error]>/property rename [old name] [new name]"
+                - narrate "<&[error]>/property delete [name]"
+                - narrate "<&[error]>/property setprice [name] [price] <&[warning]>- sets the monthly rent price"
+                - narrate "<&[error]>/property setbuyprice [name] [buy price] <&[warning]>- sets the permanent buy price - use 0 to prevent buying (ie rent is required)"
+                - narrate "<&[error]>/property open [name] <&[warning]>- opens an area for renting by anyone (and kicks any current owner)"
+                - narrate "<&[error]>/property close [name] <&[warning]>- closes the area from renting (and kicks any current owner)"
+                - narrate "<&[error]>/property grant [name] [player] ['rent' or 'own'] <&[warning]>- grants the area to a player (regardless if open or closed) (WILL CHARGE THEM)"
+                - narrate "<&[error]>/property teleport [name] <&[warning]>- teleports you to the property"
+                - narrate "<&[error]>/property rpstats (name) <&[warning]>- shows RP/local chat statistics for the property"
+                - narrate "<&[error]>/property show (name) <&[warning]>- shows the region for the property"
+                - narrate "<&[error]>/property shownear <&[warning]>- shows the region of all nearby properties"
+            - narrate "<&[error]>/property rent (name) <&[warning]>- claims the property for rent, you will have to pay the rent price immediately, and then once per month"
+            - narrate "<&[error]>/property buy (name) <&[warning]>- buys a property forever, at high initial cost"
+            - narrate "<&[error]>/property pay (name) <&[warning]>- to pay your monthly rent on a property already claimed"
+            - narrate "<&[error]>/property unclaim (name) <&[warning]>- to give up a property"
+            - narrate "<&[error]>/property transfer [name] [to-player] <&[warning]>- to give a property to a specific player"
+            - narrate "<&[error]>/property description [name] [line/remove/clear] [text] <&[warning]>- edits the description of the property"
+            - narrate "<&[error]>/property addmember [name] [player]"
+            - narrate "<&[error]>/property removemember [name] [player]"
+            - narrate "<&[error]>/property info (name)"
+            - narrate "<&[error]>/property list"
+
+rent_is_owned_proc:
+    type: procedure
+    debug: false
+    definitions: area
+    script:
+    - if <player.flag[character_mode]> != ic:
+        - determine false
+    - define area_data <server.flag[rentables.<[area]>]>
+    - if <[area_data.owner]||null> == <player.proc[cc_idpair]>:
+        - determine true
+    - define business <[area_data.owner_business]||null>
+    - if <[business]> != null:
+        - define business_data <server.flag[businesses.<[business]>]>
+        - if <[business_data.owner]||null> == <player.proc[cc_idpair]>:
+            - determine true
+        - if <[business_data.members].contains[<player.proc[cc_idpair]>]>:
+            - determine true
+    - determine false
+
+rent_proc_max_properties:
+    type: procedure
+    debug: false
+    definitions: player
+    script:
+    - determine 1
+
+rent_claim_now_task:
+    type: task
+    debug: false
+    definitions: area|forever
+    script:
+    - define area_data <server.flag[rentables.<[area]>]>
+    - define amount <[area_data.<tern[<[forever]>].pass[buy_price].fail[price]>]>
+    - if !<player.has_permission[dscript.free_rent]> && !<[forever]>:
+        - money take quantity:<[amount]>
+        - run eco_log_loss def:<list[<[amount]>].include_single[claimed property <[area_data.name]>]>
+        - flag server businesses.Town_Rent.money:+:<[area_data.price]>
+        - run eco_log_gain_business def:<list_single[town_rent].include[<[amount]>].include_single[player <player.name.on_hover[<player.uuid>]> paid claim price for property <[area_data.name]>]>
+        - narrate "<&[base]>Paid <&6><[amount]> TG"
+    - flag server rentables.<[area]>.owner:<player>
+    - flag server rentables.<[area]>.members:<list>
+    - flag player character_cards.<player.flag[current_character]>.rentables_owned:->:<[area]>
+    - narrate "<&[base]>You now own <&[emphasis]><[area_data.name]><&[base]>!"
+    - if <[forever]>:
+        - flag server rentables.<[area]>.rent_due:!
+        - flag server rentables.<[area]>.owned_type:bought
+    - else:
+        - define next_due <util.time_now.add[30d]>
+        - flag server rentables.<[area]>.rent_due:<[next_due]>
+        - flag server rentables.<[area]>.owned_type:rented
+        - narrate "<&[base]>Rent is due in <&[emphasis]><[next_due].from_now.in_days.round_up> Days"
+    - title title:<&b><&o><[area_data.name]> "subtitle:<&[base]>Property Claimed"
+
+rentable_area_get:
+    type: task
+    debug: false
+    script:
+    - if <[location]||null> == null:
+        - define location <context.location||<player.location>>
+    - define area <[location].cuboids.include[<[location].polygons>].filter[note_name.starts_with[rentable_id_]].first.note_name.after[rentable_id_]||>
+
+rentable_name_match_logic:
+    type: task
+    debug: false
+    script:
+    - if <context.args.size> == 1:
+        - inject rentable_area_get
+        - if <[area].length> == 0:
+            - narrate "<&[error]>The location you're in is not a defined property."
+            - stop
+    - else:
+        - define area <context.args.get[2].escaped>
+        - if !<server.has_flag[rentables.<[area]>]>:
+            - narrate "<&[error]>No property with that name exists."
+            - stop
+    - define area_data <server.flag[rentables.<[area]>]>
+
+rent_handler_world:
+    type: world
+    debug: false
+    events:
+        on system time 08:00:
+        - foreach <server.flag[rentables].keys> as:area:
+            - wait 1t
+            - define area_data <server.flag[rentables.<[area]>]>
+            - if <[area_data].contains[rent_due]> && <[area_data].contains[owner]>:
+                - if <[area_data.rent_due].add[40d].is_before[<util.time_now>]>:
+                    - if <[area_data]> == business:
+                        - if <[area_data.owner_business].before[__].as[player].is_online>:
+                            - flag server businesses.<[area_data.owner_business]>.rentables_owned:<-:<[area]>
+                            - define business_data <server.flag[businesses.<[area_data.owner_business]>]>
+                            - narrate "<&[warning]>Business <&[emphasis]><[business_data.name]><&[warning]> lost claim of <[area_data.name]> <&[warning]> due to not paying rent." targets:<[business_data].proc[business_get_msg_targets]>
+                    - else:
+                        - if <[area_data.owner].before[__].as[player].is_online>:
+                            - narrate "<&[warning]>You have lost ownership of property <&[emphasis]><[area_data.name]> <&[warning]>due to not paying rent." targets:<[area_data.owner]>
+                        - run cc_exclude_flag def.pair:<[area_data.owner]> def.flag:rentables_owned def.value:<[area]>
+                    - flag server rentables.<[area]>.owner:!
+                    - flag server rentables.<[area]>.owner_business:!
+                    - flag server rentables.<[area]>.owned_type:!
+        after player joins:
+        - foreach <player.flag[character_cards].keys||<list>> as:char:
+            - foreach <player.flag[character_cards.<[char]>.rentables_owned]||<list>> as:area:
+                - define area_data <server.flag[rentables.<[area]>]>
+                - if <[area_data].contains[rent_due]> && <[area_data.rent_due].is_before[<util.time_now>]>:
+                    - narrate "<&[warning]>Rent is due for property <&[emphasis]><[area_data.name]><&[warning]>! Your character <[char].proc[cc_name].custom_color[emphasis]> must pay within <&[emphasis]><[area_data.rent_due].add[31d].from_now.in_days.round_up> Days"
+            - wait 10t
+            - foreach <player.flag[character_cards.<[char]>.businesses_owned]||<list>> as:business:
+                - define business_data <server.flag[businesses.<[business]>]>
+                - foreach <[business_data.rentables_owned]||<list>> as:area:
+                    - define area_data <server.flag[rentables.<[area]>]>
+                    - if <[area_data].contains[rent_due]> && <[area_data.rent_due].is_before[<util.time_now>]>:
+                        - narrate "<&[warning]>Rent is due for property <&[emphasis]><[area_data.name]><&[warning]>! Your character <[char].proc[cc_name].custom_color[emphasis]>'s business <[business_data.name].custom_color[emphasis]> must pay within <&[emphasis]><[area_data.rent_due].add[31d].from_now.in_days.round_up> Days"
+        after player enters rentable_id_*:
+        - define area <context.area.note_name.after[rentable_id_]>
+        - define area_data <server.flag[rentables.<[area]>]>
+        - if !<[area_data.owner].exists>:
+            - actionbar "<&[base]>Approaching <&[emphasis]><[area_data.name]><&[base]> (<tern[<[area_data.rentable]>].pass[Open].fail[Closed]>)."
+        - else:
+            - if !<[area_data.owner_business].exists>:
+                - actionbar "<&[base]>Approaching <&[emphasis]><[area_data.name]><&[base]> (owned by <[area_data.owner_business].proc[cc_format_idpair]>)."
+            - else:
+                - actionbar "<&[base]>Approaching <&[emphasis]><[area_data.name]><&[base]> (owned by business <&[emphasis]><[area_data.owner_business].unescaped><&[base]>)."

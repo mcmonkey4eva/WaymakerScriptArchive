@@ -1,0 +1,517 @@
+business_command:
+    type: command
+    debug: false
+    name: business
+    description: Handles businesses.
+    usage: /business
+    permission: dscript.business
+    tab completions:
+        1: <list[help|addmember|removemember|pay|withdraw|info|list|description|claimproperty|buyproperty|unclaimproperty|history].include[<tern[<player.has_permission[dscript.rent_admin]>].pass[create|delete|setowner|setbalance|rename].fail[<list>]>]>
+        2: <server.flag[businesses].values.parse[get[name]]||<list>>
+        3: <server.online_players.filter[has_flag[vanished].not].parse[name].include[none]>
+    script:
+    - if !<player.has_flag[waymaker_verified]>:
+        - narrate "<&[error]>You cannot use this command until you are verified."
+    - choose <context.args.first||help>:
+        - case create:
+            - if !<player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/business create [name] <&[warning]>- to make a new business"
+                - stop
+            - define business <context.args.get[2].escaped>
+            - if <server.has_flag[businesses.<[business]>]>:
+                - narrate "<&[error]>A business with that name already exists."
+                - stop
+            - define business_data <map.with[name].as[<context.args.get[2]>].with[members].as[<list>].with[owned].as[false].with[created_date].as[<util.time_now>].with[created_by].as[<player>].with[money].as[0].with[description].as[<list[Unset.]>]>
+            - flag server businesses.<[business]>:<[business_data]>
+            - define reason "was created"
+            - run eco_log_set_business def:<list_single[<[business]>].include[0].include_single[<[reason]>]>
+            - narrate "<&[base]>Business <&[emphasis]><[business_data.name]><&[base]> created."
+        - case delete:
+            - if !<player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/business delete [name] <&[warning]>- to delete a business"
+                - stop
+            - inject business_name_match_logic
+            - foreach <[business_data.rentables_owned]||<list>> as:area:
+                - foreach <server.flag[rentables.<[area]>.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:rentable_member_of def.value:<[area]>
+                - flag server rentables.<[area]>.owner:!
+                - flag server rentables.<[area]>.owner_business:!
+                - flag server rentables.<[area]>.owned_type:!
+                - flag server rentables.<[area]>.members:<list>
+            - flag server businesses.<[business]>:!
+            - if <[business_data.owner]||null> != null:
+                - run cc_exclude_flag def.pair:<[business_data.owner]> def.flag:businesses_owned def.value:<[business]>
+                - foreach <server.flag[business_data.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:business_member_of def.value:<[business]>
+            - narrate "<&[base]>Business <&[emphasis]><[business_data.name]><&[base]> deleted. It had <&6><[business_data.money]> TG"
+        - case rename:
+            - if !<player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business rename [old name] [new name] <&[warning]>- to change the name of a business"
+                - stop
+            - inject business_name_match_logic
+            - define new_name <context.args.get[3].escaped>
+            - if <server.has_flag[businesses.<[new_name]>]>:
+                - narrate "<&[error]>A business with that name already exists."
+                - stop
+            - foreach <[business_data.rentables_owned]||<list>> as:area:
+                - flag server rentables.<[area]>.owner_business:<[new_name]>
+            - flag server businesses.<[new_name]>:<[business_data]>
+            - flag server businesses.<[new_name]>.name:<[new_name].unescaped>
+            - flag server businesses.<[business]>:!
+            - if <[business_data.owner]||null> != null:
+                - run cc_exclude_flag def.pair:<[business_data.owner]> def.flag:businesses_owned def.value:<[business]>
+                - run cc_include_flag def.pair:<[business_data.owner]> def.flag:businesses_owned def.value:<[new_name]>
+                - foreach <server.flag[business_data.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:business_member_of def.value:<[business]>
+                    - run cc_include_flag def.pair:<[member]> def.flag:business_member_of def.value:<[new_name]>
+            - narrate "<&[base]>Business renamed to <&[emphasis]><[new_name].unescaped><&[base]>."
+        - case setowner:
+            - if !<player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business setowner [name] [player/'none'] <&[warning]>- to change the owner of a business - use 'none' to make it owned by nobody and remove all members/properties/etc"
+                - stop
+            - inject business_name_match_logic
+            - if <context.args.get[3]> == none:
+                - if <[business_data.owner]||null> != null:
+                    - run cc_exclude_flag def.pair:<[business_data.owner]> def.flag:businesses_owned def.value:<[business]>
+                #- foreach <[business_data.rentables_owned]||<list>> as:area:
+                #    - flag server rentables.<[area]>.owner:!
+                #    - flag server rentables.<[area]>.owner_business:!
+                - flag server businesses.<[business]>.owner:!
+                - flag server businesses.<[business]>.owned:false
+                - flag server businesses.<[business]>.members:<list>
+                - narrate "<&[base]>Business <&[emphasis]><[business_data.name]><&[base]> no longer owned."
+                - stop
+            - define target <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[target]> == null:
+                - narrate "<&[error]>Unknown player '<&[emphasis]><context.args.first><&[error]>'."
+                - stop
+            - if <[business_data.owner]||null> != null:
+                - run cc_exclude_flag def.pair:<[business_data.owner]> def.flag:businesses_owned def.value:<[business]>
+            - flag server businesses.<[business]>.owner:<[target]>
+            - flag server businesses.<[business]>.owned:true
+            - run cc_include_flag def.pair:<[target]> def.flag:businesses_owned def.value:<[business]>
+            - narrate "<&[base]>Business <&[emphasis]><[business_data.name]><&[base]> now owned by <proc[proc_format_name].context[<[target]>|<player>]>."
+            - if <[target].is_online>:
+                - narrate "<&[base]>You now own business <&[emphasis]><[business_data.name]><&[base]>." targets:<[target]>
+        - case setbalance:
+            - if !<player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>You are not authorized to do that."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business setbalance [name] [#] <&[warning]>- to staff-set the balance of a business"
+                - stop
+            - inject business_name_match_logic
+            - define amount <context.args.get[3]>
+            - if !<[amount].is_integer>:
+                - narrate "<&[error]>Amount must be an integer number."
+                - stop
+            - if <[amount]> < 0 || <[amount]> > 999999999:
+                - narrate "<&[error]>Amount must be non-negative and less than a billion."
+                - stop
+            - flag server businesses.<[business]>.money:<[amount]>
+            - define reason "was staff-set to <[amount]> by <&[emphasis]><player.name.on_hover[<player.uuid>]>"
+            - run eco_log_set_business def:<list_single[<[business]>].include[<[amount]>].include_single[<[reason]>]>
+            - narrate "<&[base]>Set balance of business <&[emphasis]><[business_data.name]><&[base]> to <&6><[amount]> TG"
+        - case addmember:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business addmember [name] [player] <&[warning]>- to give a player control of your business"
+                - stop
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You do not own that business."
+                - stop
+            - define target <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[target]> == null:
+                - narrate "<&[error]>Unknown player '<&[emphasis]><context.args.first><&[error]>'."
+                - stop
+            - if <[target].flag[character_mode]> != ic:
+                - narrate "<&[error]>That player is not IC."
+                - stop
+            # TODO: Allow specifying target character card
+            - if <[business_data.members].contains[<[target].proc[cc_idpair]>]>:
+                - narrate "<&[error]>That player is already a member of the business."
+                - stop
+            - flag server businesses.<[business]>.members:->:<[target].proc[cc_idpair]>
+            - run cc_include_flag def.pair:<[target]> def.flag:business_member_of def.value:<[business]>
+            - narrate "<&[base]>Added <proc[proc_format_name].context[<[target]>|<player>]> to business <&[emphasis]><[business_data.name]><&[base]>."
+            - if <[target].is_online>:
+                - narrate "<&[base]>You are now a member of business <&[emphasis]><[business_data.name]><&[base]>." targets:<[target]>
+        - case removemember:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business removemember [name] [player] <&[warning]>- to remove a player's control in your business"
+                - stop
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You do not own that business."
+                - stop
+            - define target <server.match_offline_player[<context.args.get[3]>]||null>
+            - if <[target]> == null:
+                - narrate "<&[error]>Unknown player '<&[emphasis]><context.args.first><&[error]>'."
+                - stop
+            - if <[target].flag[character_mode]> != ic:
+                - narrate "<&[error]>That player is not IC."
+                - stop
+            # TODO: Allow specifying target character card
+            - if !<[business_data.members].contains[<[target].proc[cc_idpair]>]>:
+                - narrate "<&[error]>That player is not a member of the business."
+                - stop
+            - flag server businesses.<[business]>.members:<-:<[target].proc[cc_idpair]>
+            - run cc_exclude_flag def.pair:<[target]> def.flag:business_member_of def.value:<[business]>
+            - narrate "<&[base]>Removed <proc[proc_format_name].context[<[target]>|<player>]> from business <&[emphasis]><[business_data.name]><&[base]>."
+            - if <[target].is_online>:
+                - narrate "<&[base]>You are no longer a member of business <&[emphasis]><[business_data.name]><&[base]>." targets:<[target]>
+        - case claimproperty:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business claimproperty [name] [property name] <&[warning]>- to claim a property for rent for a business"
+                - stop
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You do not own that business."
+                - stop
+            - define area <context.args.get[3].escaped>
+            - if !<server.has_flag[rentables.<[area]>]>:
+                - narrate "<&[error]>No property with that name exists."
+                - stop
+            - define area_data <server.flag[rentables.<[area]>]>
+            - if !<[area_data.rentable]>:
+                - narrate "<&[error]>This property is not rentable."
+                - stop
+            - if <[area_data].contains[owner]>:
+                - narrate "<&[error]>This property is already claimed."
+                - stop
+            - if <[business_data.money]> < <[area_data.price]>:
+                - narrate "<&[error]>Your business cannot afford to rent this property. The price is <&6><[area_data.price]> TG"
+                - stop
+            - if <server.has_flag[businesses.<[business]>.rentable_recently_unclaimed.<[area]>]>:
+                - narrate "<&[error]>Your business recently manually unclaimed this property. You must wait a few days before you will be allowed to re-claim it yourself (to prevent trolling of the property system). Contact staff if you need an exception made for your case."
+                - stop
+            - define max 1
+            - if <[business_data.rentables_owned].size||0> >= <[max]>:
+                - narrate "<&[error]>Your business already owns too many properties. The max you are allowed is <&[emphasis]><[max]><&[error]>."
+                - stop
+            - if <context.args.get[4]||null> == confirm && <player.has_flag[must_confirm_rentable_for_business.<[business]>.<[area]>]>:
+                - run rent_claim_now_business_task def:<[business]>|<[area]>|false
+                - flag <player> must_confirm_rentable_for_business.<[business]>.<[area]>:!
+            - else:
+                - flag <player> must_confirm_rentable_for_business.<[business]>.<[area]> duration:1h
+                - narrate "<&[base]>Are you sure? Use <&[warning]>/business claimproperty <[business]> <[area]> confirm"
+        - case buyproperty:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business buyproperty [name] [property name] <&[warning]>- to buy a property for a business"
+                - stop
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You do not own that business."
+                - stop
+            - define area <context.args.get[3].escaped>
+            - if !<server.has_flag[rentables.<[area]>]>:
+                - narrate "<&[error]>No property with that name exists."
+                - stop
+            - define area_data <server.flag[rentables.<[area]>]>
+            - if !<[area_data.rentable]> || <[area_data.buy_price]> <= 0:
+                - narrate "<&[error]>This property is not buyable."
+                - stop
+            - if <[area_data].contains[owner]>:
+                - narrate "<&[error]>This property is already claimed."
+                - stop
+            - if <[business_data.money]> < <[area_data.buy_price]>:
+                - narrate "<&[error]>Your business cannot afford to buy this property. The price is <&6><[area_data.buy_price]> TG"
+                - stop
+            - define max 1
+            - if <[business_data.rentables_owned].size||0> >= <[max]>:
+                - narrate "<&[error]>Your business already owns too many properties. The max you are allowed is <&[emphasis]><[max]><&[error]>."
+                - stop
+            - if <context.args.get[4]||null> == confirm && <player.has_flag[must_confirm_rentable_buy_for_business.<[business]>.<[area]>]>:
+                - run rent_claim_now_business_task def:<[business]>|<[area]>|true
+                - flag <player> must_confirm_rentable_buy_for_business.<[business]>.<[area]>:!
+            - else:
+                - flag <player> must_confirm_rentable_buy_for_business.<[business]>.<[area]> duration:1h
+                - narrate "<&[base]>Are you sure? Use <&[warning]>/business buyproperty <[business]> <[area]> confirm"
+        - case unclaimproperty:
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business unclaimproperty [name] [property-name] <&[warning]>- to release a business's claim on a property"
+                - stop
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]>:
+                - narrate "<&[error]>You do not own that business."
+                - stop
+            - define area <context.args.get[3].escaped>
+            - if !<server.has_flag[rentables.<[area]>]>:
+                - narrate "<&[error]>No property with that name exists."
+                - stop
+            - define area_data <server.flag[rentables.<[area]>]>
+            - if <[area_data.owner_business]||null> != <[business]>:
+                - narrate "<&[error]>Your business does not own that property."
+                - stop
+            - if <context.args.get[4]||null> == confirm && <player.has_flag[must_confirm_rentable_for_business.<[business]>.<[area]>]>:
+                - flag <player> must_confirm_rentable_for_business.<[business]>.<[area]>:!
+                - flag server businesses.<[business]>.rentables_owned:<-:<[area]>
+                - flag server rentables.<[area]>.owner:!
+                - flag server rentables.<[area]>.owner_business:!
+                - flag server rentables.<[area]>.owned_type:!
+                - foreach <server.flag[rentables.<[area]>.members]> as:member:
+                    - run cc_exclude_flag def.pair:<[member]> def.flag:rentable_member_of def.value:<[area]>
+                - flag server rentables.<[area]>.members:<list>
+                - flag server businesses.<[business]>.rentable_recently_unclaimed.<[area]> duration:5d
+                - narrate "<&[base]>Property unclaimed."
+            - else:
+                - flag <player> must_confirm_rentable_for_business.<[business]>.<[area]> duration:1h
+                - narrate "<&[base]>Are you sure? Use <&[warning]>/business unclaimproperty <[area]> confirm"
+        - case pay:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business pay [name] [#] <&[warning]>- to pay any business an amount of Trade Gold"
+                - stop
+            - inject business_name_match_logic
+            - if !<[business_data.owner].exists> && <[business]> != Waymaker:
+                - narrate "<&[error]>That business does not have an owner."
+                - stop
+            - define amount <context.args.get[3]>
+            - if !<[amount].is_integer>:
+                - narrate "<&[error]>Amount must be an integer number."
+                - stop
+            - if <[amount]> <= 0 || <[amount]> > 999999999:
+                - narrate "<&[error]>Amount must be more than zero and less than a billion."
+                - stop
+            - if <[amount]> > <player.money>:
+                - narrate "<&[error]>You cannot afford to pay that much."
+                - stop
+            - money take quantity:<[amount]>
+            - flag server businesses.<[business]>.money:+:<[amount]>
+            - define reason "was paid via command by <&[emphasis]><player.name.on_hover[<player.uuid>]>"
+            - run eco_log_gain_business def:<list_single[<[business]>].include[<[amount]>].include_single[<[reason]>]>
+            - define reason "paid via command to business <&[emphasis]><[business_data.name]>"
+            - run eco_log_loss def.amount:<[amount]> def.reason:<[reason]>
+            - narrate "<&[base]>You paid<&6> <[amount]> Trade Gold<&[base]> to business <&[emphasis]><[business_data.name]><&[base]>."
+            - define can_read <[business_data].proc[business_get_msg_targets]>
+            - foreach <[business_data.rentables_owned]||<list>> as:area:
+                - define can_read:|:<server.flag[rentables.<[area]>.members].parse[before[__].as[player]]||<list>>
+            - define src <player>
+            - narrate "<[src].proc[proc_format_name].context[<player>]> paid the business <&[emphasis]><[business_data.name]><&6> <[amount]> Trade Gold<&[base]>." targets:<[can_read].deduplicate> per_player
+        - case withdraw:
+            - if <player.flag[character_mode]> != ic:
+                - narrate "<&[error]>You must be IC to use business commands."
+                - stop
+            - if <context.args.size> < 3:
+                - narrate "<&[error]>/business withdraw [name] [#] <&[warning]>- to withdraw Trade Gold from your business to your personal account"
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]> && !<[business_data.members].contains[<player.proc[cc_idpair]>]>:
+                - if <player.has_permission[dscript.business_withdraw_override]>:
+                    - narrate "<&[warning]>Using staff power to withdraw from a business you don't own..."
+                - else:
+                    - narrate "<&[error]>You do not own that business and are not a member of it."
+                    - stop
+            - define amount <context.args.get[3]>
+            - if !<[amount].is_integer>:
+                - narrate "<&[error]>Amount must be an integer number."
+                - stop
+            - if <[amount]> <= 0 || <[amount]> > 999999999:
+                - narrate "<&[error]>Amount must be more than zero and less than a billion."
+                - stop
+            - if <[amount]> > <[business_data.money]>:
+                - narrate "<&[error]>Your business does not have that much gold available."
+                - stop
+            - money give quantity:<[amount]>
+            - flag server businesses.<[business]>.money:-:<[amount]>
+            - define reason "was withdrawn from via command by <&[emphasis]><player.name.on_hover[<player.proc[cc_idpair]>]>"
+            - run eco_log_loss_business def:<list_single[<[business]>].include[<[amount]>].include_single[<[reason]>]>
+            - define reason "withdrew via command from business <&[emphasis]><[business_data.name]>"
+            - run eco_log_gain def.amount:<[amount]> def.reason:<[reason]>
+            - define src <player>
+            - narrate "<[src].proc[proc_format_name].context[<player>]> withdrew<&6> <[amount]> Trade Gold<&[base]> from the business <&[emphasis]><[business_data.name]><&[base]>." targets:<[business_data].proc[business_get_msg_targets]> per_player
+        - case description:
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/business description [name] [...]"
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]> && !<[business_data.members].contains[<player.proc[cc_idpair]>]>:
+                - if !<player.has_permission[dscript.business_withdraw_override]>:
+                    - narrate "<&[error]>You do not own that business."
+                    - stop
+            - define description <list[<[business_data.description]>]>
+            - run multi_line_edit_tool def.args:<context.args.get[3].to[last]> def.orig_lines:<[description]> "def.cmd_prefix:/business description [name]" def.wrap_len:99999 def.raw_args:<context.raw_args.after[ ].after[ ].parse_color> def.def_color:<&f> save:edited
+            - define description <entry[edited].created_queue.determination.first>
+            - flag server businesses.<[business]>.description:<[description]>
+        - case history:
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/business history [name] <&[warning]>- to show eco history for a business"
+                - stop
+            - inject business_name_match_logic
+            - if <[business_data.owner]||null> != <player.proc[cc_idpair]> && !<[business_data.members].contains[<player.proc[cc_idpair]>]> && !<player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>You do not own that business."
+                - stop
+            - define page <context.args.get[3]||1>
+            - if !<[page].is_integer>:
+                - narrate "<&[error]>Invalid page number."
+                - stop
+            - define page_start <[page].sub[1].mul[10]>
+            - define page_end <[page_start].add[10]>
+            - define history_length <server.flag[businesses.<[business]>.economy_history].size||0>
+            - define history <server.flag[businesses.<[business]>.economy_history].reverse.get[<[page_start]>].to[<[page_end]>]||<list>>
+            - if <[page]> == 1:
+                - narrate "<&[base]>== Business <&[emphasis]><[business_data.name]> <&[base]>has <&6><[business_data.money]> Trade Gold<&[base]>... <&[base]>=="
+            - else:
+                - narrate "<&[base]>== Business <&[emphasis]><[business_data.name]> <&[base]>economy history, page <&[emphasis]><[page]><&[base]>: =="
+            - if <[history].is_empty>:
+                - narrate "<&[error]>No history to show."
+            - else:
+                - foreach <[history]> as:entry:
+                    - narrate <[entry]>
+            - define previous_page <&[clickable]><element[<&lb>Previous Page: <[page].sub[1]><&rb>].on_hover[Click To Navigate].on_click[/business history <[business]> <[page].sub[1]>]>
+            - define next_page <&[clickable]><element[<&lb>Next Page: <[page].add[1]><&rb>].on_hover[Click To Navigate].on_click[/business history <[business]> <[page].add[1]>]>
+            - if <[page]> == 1 && <[history_length]> > <[page_end]>:
+                - narrate <[next_page]>
+            - else if <[page]> > 1 && <[history_length]> > <[page_end]>:
+                - narrate "<[previous_page]> <&7>| <[next_page]>"
+            - else if <[page]> > 1:
+                - narrate <[previous_page]>
+        - case info:
+            - if <context.args.size> < 2:
+                - narrate "<&[error]>/business info [name] <&[warning]>- to show information about a business"
+                - stop
+            - inject business_name_match_logic
+            - narrate "<&[base]>=== <&[emphasis]><[business_data.name]> <&[base]>==="
+            - if <[business_data.owner]||null> != null:
+                - define owner <[business_data.owner].split[__char__].limit[2]>
+                - narrate "<&[base]>Owner: <[business_data.owner].proc[cc_format_idpair].context[<player>]>"
+                - if !<[business_data.members].is_empty>:
+                    - narrate "<&[base]>Members: <&[emphasis]><[business_data.members].parse_tag[<[parse_value].proc[cc_format_idpair].context[<player>]>].formatted>"
+            - else:
+                - narrate "<&[base]>Not yet owned"
+            - narrate "<&[base]>Description: <&f><[business_data.description].separated_by[<n>]>"
+            - if <[business_data.rentables_owned].size||0> > 0:
+                - narrate "<&[base]>Owned properties: <&[emphasis]><[business_data.rentables_owned].parse[unescaped].formatted>"
+            - if <[business_data.owner]||null> == <player.proc[cc_idpair]> || <[business_data.members].contains[<player.proc[cc_idpair]>]> || <player.has_permission[dscript.business_admin]>:
+                - narrate "<&[base]>Balance: <&6><[business_data.money]> TG"
+        - case list:
+            - narrate "<&[base]>Owned businesses: <&[emphasis]><server.flag[businesses].values.filter[get[owned]].parse[get[name]].alphanumeric.formatted||None>"
+            - narrate "<&[base]>Unowned businesses: <&[emphasis]><server.flag[businesses].values.filter[get[owned].not].parse[get[name]].alphanumeric.formatted||None>"
+        - default:
+            - if <player.has_permission[dscript.business_admin]>:
+                - narrate "<&[error]>/business create [name] <&[warning]>- to make a new business"
+                - narrate "<&[error]>/business delete [name] <&[warning]>- to delete a business"
+                - narrate "<&[error]>/business rename [old name] [new name] <&[warning]>- to change the name of a business"
+                - narrate "<&[error]>/business setowner [name] [player/'none'] <&[warning]>- to change the owner of a business - use 'none' to make it owned by nobody and remove all members"
+                - narrate "<&[error]>/business setbalance [name] [#] <&[warning]>- to staff-set the balance of a business"
+            - narrate "<&[error]>/business history [name] <&[warning]>- to show eco history for a business"
+            - narrate "<&[error]>/business addmember [name] [player] <&[warning]>- to give a player control of your business"
+            - narrate "<&[error]>/business removemember [name] [player] <&[warning]>- to remove a player's control in your business"
+            - narrate "<&[error]>/business claimproperty [name] [property name] <&[warning]>- to claim a property for rent for a business"
+            - narrate "<&[error]>/business buyproperty [name] [property name] <&[warning]>- to buy a property for a business"
+            - narrate "<&[error]>/business unclaimproperty [name] [property-name] <&[warning]>- to release a business's claim on a property"
+            - narrate "<&[error]>/business description [name] [...] <&[warning]>- to change the description of your business"
+            - narrate "<&[error]>/business withdraw [name] [#] <&[warning]>- to withdraw Trade Gold from your business to your personal account"
+            - narrate "<&[error]>/business pay [name] [#] <&[warning]>- to pay any business an amount of Trade Gold"
+            - narrate "<&[error]>/business info [name] <&[warning]>- to show information about a business"
+            - narrate "<&[error]>/business list <&[warning]>- to show a list of all known businesses"
+
+business_name_match_logic:
+    type: task
+    debug: false
+    script:
+    - if <context.args.size> == 1:
+        - narrate "<&[error]>Must specify a business name."
+        - stop
+    - else:
+        - define business <context.args.get[2].escaped>
+        - if !<server.has_flag[businesses.<[business]>]>:
+            - narrate "<&[error]>No business with that name exists."
+            - stop
+    - define business_data <server.flag[businesses.<[business]>]>
+
+eco_log_gain_business:
+    type: task
+    debug: false
+    definitions: business|amount|reason
+    script:
+    - define new_total <server.flag[businesses.<[business]>.money]>
+    - flag server "businesses.<[business]>.economy_history:->:<element[<&2>+ <[amount]> TG].on_hover[<util.time_now.format>]> <&f><[reason]> <&f>(now <&6><[new_total]> TG<&f>)"
+    - flag server businesses.<[business]>.eco_shift_today:+:<[amount]>
+    - define message "] + **business** `<[business].unescaped>` GAINED `<[amount]> TG` for reason `<[reason].proc[discord_escape]>` (now `<[new_total]> TG`)"
+    - run eco_log_to_discord def:<list_single[<[message]>]>
+
+eco_log_loss_business:
+    type: task
+    debug: false
+    definitions: business|amount|reason
+    script:
+    - define new_total <server.flag[businesses.<[business]>.money]>
+    - flag server "businesses.<[business]>.economy_history:->:<element[<&c>- <[amount]> TG].on_hover[<util.time_now.format>]> <&f><[reason]> <&f>(now <&6><[new_total]> TG<&f>)"
+    - flag server businesses.<[business]>.eco_shift_today:-:<[amount]>
+    - define message "] - **business** `<[business].unescaped>` LOST `<[amount]> TG` for reason `<[reason].proc[discord_escape]>` (now `<[new_total]> TG`)"
+    - run eco_log_to_discord def:<list_single[<[message]>]>
+
+eco_log_set_business:
+    type: task
+    debug: false
+    definitions: business|amount|reason
+    script:
+    - if !<[amount].is_integer||false>:
+        - debug error "Invalid amount <[amount]> for eco log with reason <[reason]>"
+        - stop
+    - flag server "businesses.<[business]>.economy_history:->:<element[<&b>* SET TO <[amount]> TG].on_hover[<util.time_now.format>]> <&f><[reason]>"
+    - flag server businesses.<[business]>.eco_shift_today:!
+    - define message "] `*` **business** `<[business]>` WAS RESET TO `<[amount]> TG` for reason `<[reason].proc[discord_escape]>`"
+    - run eco_log_to_discord def:<list_single[<[message]>]>
+
+rent_claim_now_business_task:
+    type: task
+    debug: false
+    definitions: business|area|forever
+    script:
+    - define area_data <server.flag[rentables.<[area]>]>
+    - define business_data <server.flag[businesses.<[business]>]>
+    - define amount <[area_data].get[<tern[<[forever]>].pass[buy_price].fail[price]>]>
+    - flag server businesses.<[business]>.money:-:<[amount]>
+    - flag server rent_bank_account:+:<[amount]>
+    - run eco_log_loss_business def:<list_single[<[business]>].include[<[amount]>].include_single[claimed property <[area_data.name]>]>
+    - narrate "<&[base]>Paid <&6><[amount]> TG"
+    - flag server rentables.<[area]>.owner:business
+    - flag server rentables.<[area]>.owner_business:<[business]>
+    - flag server rentables.<[area]>.members:<list>
+    - flag server businesses.<[business]>.rentables_owned:->:<[area]>
+    - narrate "<&[base]>Business <&[emphasis]><[business_data.name]> now owns <&[emphasis]><[area_data.name]><&[base]>!" targets:<[business_data].proc[business_get_msg_targets]>
+    - if <[forever]>:
+        - flag server rentables.<[area]>.rent_due:!
+        - flag server rentables.<[area]>.owned_type:bought
+    - else:
+        - define next_due <util.time_now.add[30d]>
+        - flag server rentables.<[area]>.rent_due:<[next_due]>
+        - flag server rentables.<[area]>.owned_type:rented
+        - narrate "<&[base]>Rent is due in <&[emphasis]><[next_due].from_now.in_days.round> Days"
+
+business_get_msg_targets:
+    type: procedure
+    definitions: business_data
+    script:
+    - determine <[business_data.members].include[<[business_data.owner]>].parse[before[__].as[player]].deduplicate>
